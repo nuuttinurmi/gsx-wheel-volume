@@ -3,9 +3,10 @@
 Use the physical **volume wheel on the Sennheiser GSX 1000 / 1200** as the
 PipeWire volume control on Linux, complete with the desktop volume OSD.
 
-The GSX exposes its wheel as a raw HID device. The DAC's firmware adjusts
-its own internal gain, which userspace (and therefore the desktop volume
-slider) never sees. This daemon reads the wheel, translates each detent
+The GSX's firmware adjusts its own internal gain when the wheel turns. It
+*also* reports each turn to the host over HID interface 05, which the
+kernel exposes as a keyboard (`KEY_VOLUMEUP` / `KEY_VOLUMEDOWN`) and as
+raw `/dev/hidraw0`. This daemon reads the raw node, translates each detent
 into a `wpctl set-volume` call on the target sink, and leaves the desktop
 slider as the single source of truth.
 
@@ -13,17 +14,27 @@ slider as the single source of truth.
 wheel -> /dev/hidraw0 -> gsx-wheel-volume.py -> wpctl set-volume -> PipeWire -> OSD
 ```
 
+> **Before installing:** most desktops (KDE Plasma, GNOME) already act on
+> the `KEY_VOLUMEUP`/`KEY_VOLUMEDOWN` events with their own OSD. With the
+> daemon running too, each turn moves the volume twice. Check what your
+> desktop does on its own first (see [Wheel and OS volume drift
+> apart](#wheel-and-os-volume-drift-apart)).
+
 ## Why not just let the hardware wheel do it?
 
-Tested on Fedora 44 / PipeWire 1.6.11 with a GSX 1000 (1395:00a0):
+Tested on Fedora 44 / PipeWire 1.6.11 / KDE Plasma with a GSX 1000
+(1395:00a0):
 
-- The ALSA fader (`PCM,1`) the wheel drives is **not bound to the PipeWire
-  node mixer** under the `2.0 HD` card profile, so the software slider and
-  the wheel are two independent gain stages.
-- The result is double attenuation, no OSD, and a slider that does not
-  reflect what you actually hear.
-
-Reading the wheel directly removes the ambiguity.
+- The GSX has two playback volume controls. `PCM,0` has a two-step range
+  (−0.1 dB … 0 dB; the kernel warns "Unlikely small volume range"). `PCM,1`
+  (0–74, about 1 dB per step) is the GSX's real gain stage.
+- Under the `2.0 HD` profile, PipeWire's sink binds `PCM,0`, so the OS
+  slider is effectively software volume and never reaches `PCM,1`.
+- The stock `sennheiser-gsx.conf` profile set lists `PCM,1` for the 7.1
+  path, but in testing `PCM,1` did not follow the sink volume under 7.1
+  either.
+- Result: the OS slider and the GSX's internal gain are two independent
+  gain stages.
 
 ## Install
 
@@ -142,7 +153,53 @@ idle resets, and a replay of a real six-detent capture.
 
 ## Troubleshooting
 
-**Service runs but the wheel does nothing**
+### Turning right does nothing, turning left still works
+
+The display/LED ring moves both ways, but only `KEY_VOLUMEDOWN` reaches the
+host. Confirm with:
+
+```bash
+sudo timeout 20 libinput debug-events --show-keycodes --device /dev/input/event2
+```
+
+Cause: **`PCM,1` is at its maximum (74).** The GSX firmware stops
+reporting "up" to the host when its internal gain has no headroom, but
+keeps reporting "down". Windows keeps that control in sync with its own
+volume slider, so it never sits at the top there. On Linux nothing drives
+it (see above), so once it is at maximum it stays there.
+
+Fix: give it a few steps of headroom and save the mixer state:
+
+```bash
+amixer -c0 sget PCM,1          # 74 = pinned at maximum
+amixer -c0 sset PCM,1 70       # 73 was NOT enough on the test unit; 70 works
+sudo alsactl store             # persist across reboots
+```
+
+`70` costs 4 dB at full volume. Replace `-c0` with your GSX card number
+from `cat /proc/asound/cards`.
+
+Note: `amixer` shows the driver's cached value. Turning the wheel did not
+change what `amixer` reports, so it cannot tell you where the firmware's
+internal gain currently is.
+
+### Wheel and OS volume drift apart
+
+On Windows the wheel, the GSX display and the OS volume stay in step. On
+Linux they drift, because the OS slider and the GSX's internal gain are
+separate (see [Why not just let the hardware wheel
+do it?](#why-not-just-let-the-hardware-wheel-do-it)):
+
+- The wheel changes the GSX's internal gain in its own steps and sends key
+  events. The desktop then moves the sink by its own step size (KDE:
+  `VolumeStep` in `~/.config/plasmaparc`).
+- Nothing writes the OS volume back to the GSX, so the display does not
+  follow the OS slider.
+
+Not solved yet. The likely fix is to make the sink's hardware volume drive
+`PCM,1` (as Windows does), but that has not been verified.
+
+### Service runs but the wheel does nothing
 
 ```bash
 ls -l /dev/hidraw0       # crw-rw----+ root input
@@ -156,17 +213,24 @@ sudo udevadm control --reload-rules
 sudo udevadm trigger --subsystem-match=hidraw --action=change
 ```
 
-**"cannot find sink"** — the `GSX_SINK` name does not match any node:
+### "cannot find sink"
+
+The `GSX_SINK` name does not match any node:
 
 ```bash
 wpctl status | grep GSX
 pw-dump | grep -o '"node.name".*GSX[^"]*'
 ```
 
-**Volume moves two steps per detent** — lower `GSX_BURST_MIN` to 3, or the
-firmware emits shorter bursts on your unit.
+### Volume moves two steps per detent
 
-**Volume not moving in a game** — some apps set their own per-stream
+First check that the desktop isn't also handling the wheel's volume keys
+(see the note at the top). Otherwise, lower `GSX_BURST_MIN` to 3; the
+firmware may emit shorter bursts on your unit.
+
+### Volume not moving in a game
+
+Some apps set their own per-stream
 volume; this daemon moves the *sink*, not individual streams.
 
 ## Files

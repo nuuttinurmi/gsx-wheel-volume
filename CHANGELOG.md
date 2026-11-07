@@ -18,7 +18,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `install.sh`, `uninstall.sh`, `check.sh` helper scripts.
 - 15 unit tests, including a replay of a real six-detent HID capture.
 
+### Documented
+- Troubleshooting for "wheel only turns volume down": `PCM,1` pinned at
+  its maximum (74) stops the firmware from reporting volume-up; lower it to
+  70 and run `alsactl store`.
+- The wheel also emits standard `KEY_VOLUMEUP`/`KEY_VOLUMEDOWN` that
+  desktops handle natively; running the daemon alongside double-steps.
+- Clarified the two playback controls (`PCM,0` two-step, `PCM,1` real
+  gain) and that neither profile binds the sink volume to `PCM,1` in
+  practice.
+
 ### Known issues
+- Wheel/GSX display and OS volume drift apart; nothing writes the OS volume
+  back to the GSX. See README "Wheel and OS volume drift apart".
 - Two consecutive same-direction detents with no gap are byte-identical to
   one long detent and are reported as a single tick. Only inter-report
   timing could distinguish them; see README "Known limitation".
