@@ -1,0 +1,32 @@
+[Unit]
+Description=Sennheiser GSX 1000 wheel to PipeWire volume bridge
+Documentation=https://github.com/yourname/gsx-wheel-volume
+# Only needs PipeWire reachable for wpctl; never restarts it.
+After=pipewire.service
+Wants=pipewire.service
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/gsx-wheel-volume.py
+Restart=on-failure
+RestartSec=2
+
+# Target the sink by stable node.name (ids change across reboots and
+# re-plugs). Point this at ...analog-output-surround71 if you switch the
+# card back to the 7.1 profile.
+Environment=GSX_SINK=alsa_output.usb-Sennheiser_GSX_1000_Main_Audio_5698800499047002-00.stereo-output
+Environment=GSX_STEP=1%
+
+# Hardening: the daemon only reads the hidraw node and shells out to
+# wpctl/pw-dump, so it needs very little.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectControlGroups=yes
+ProtectKernelModules=yes
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+
+[Install]
+WantedBy=default.target

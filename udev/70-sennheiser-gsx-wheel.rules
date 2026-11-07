@@ -1,0 +1,13 @@
+# Grant the logged-in desktop user access to the Sennheiser GSX 1000/1200
+# volume-wheel hidraw node so the gsx-wheel-volume user service can read
+# it without root.
+#
+# Device: 1395:00a0, HID interface 05 -> the "Sennheiser GSX 1000 Main
+# Audio" HID node that reports the rotary wheel as 02 <dir> 02 00.
+#
+# TAG+="uaccess" grants an ACL to the active console user; MODE is the
+# fallback for sessions without systemd-logind ACL support.
+#
+# Install: /etc/udev/rules.d/70-sennheiser-gsx-wheel.rules
+
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="1395", ATTRS{idProduct}=="00a0", TAG+="uaccess", MODE="0660"
