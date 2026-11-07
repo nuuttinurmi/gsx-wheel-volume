@@ -18,6 +18,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `install.sh`, `uninstall.sh`, `check.sh` helper scripts.
 - 15 unit tests, including a replay of a real six-detent HID capture.
 
+### Added (hardware volume override)
+- `alsa-card-profile/`: per-user ACP override that makes the 2.0 HD sink
+  drive `PCM,1` as hardware volume, so the OS slider, the GSX display and
+  the wheel stay in step as on Windows. Verified on 2.0 HD only.
+- Root cause documented: stock `sennheiser-gsx.conf` sets
+  `skip-probe = yes`, so ACP never builds mixer paths for the GSX and
+  `PCM,1` is never driven, even by the stock 7.1 path.
+
 ### Documented
 - Troubleshooting for "wheel only turns volume down": `PCM,1` pinned at
   its maximum (74) stops the firmware from reporting volume-up; lower it to
@@ -29,8 +37,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   practice.
 
 ### Known issues
-- Wheel/GSX display and OS volume drift apart; nothing writes the OS volume
-  back to the GSX. See README "Wheel and OS volume drift apart".
+- Without the override, wheel/GSX display and OS volume drift apart.
+- With the override, KDE's slider occasionally stops moving while the
+  wheel still changes loudness. Not diagnosed yet.
 - Two consecutive same-direction detents with no gap are byte-identical to
   one long detent and are reported as a single tick. Only inter-report
   timing could distinguish them; see README "Known limitation".

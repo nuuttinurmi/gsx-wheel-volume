@@ -14,27 +14,92 @@ slider as the single source of truth.
 wheel -> /dev/hidraw0 -> gsx-wheel-volume.py -> wpctl set-volume -> PipeWire -> OSD
 ```
 
-> **Before installing:** most desktops (KDE Plasma, GNOME) already act on
-> the `KEY_VOLUMEUP`/`KEY_VOLUMEDOWN` events with their own OSD. With the
-> daemon running too, each turn moves the volume twice. Check what your
-> desktop does on its own first (see [Wheel and OS volume drift
-> apart](#wheel-and-os-volume-drift-apart)).
+> **Try the [hardware volume override](#recommended-hardware-volume-override)
+> first.** On KDE Plasma it made the wheel, the GSX display and the OS
+> slider work together without this daemon. Most desktops (KDE Plasma,
+> GNOME) already act on the `KEY_VOLUMEUP`/`KEY_VOLUMEDOWN` events with
+> their own OSD; running the daemon as well moves the volume twice per turn.
 
-## Why not just let the hardware wheel do it?
+## How the GSX volume works
 
-Tested on Fedora 44 / PipeWire 1.6.11 / KDE Plasma with a GSX 1000
-(1395:00a0):
+Tested on Fedora 44 / PipeWire 1.6.11 / WirePlumber 0.5.19 / KDE Plasma
+with a GSX 1000 (1395:00a0):
 
 - The GSX has two playback volume controls. `PCM,0` has a two-step range
   (−0.1 dB … 0 dB; the kernel warns "Unlikely small volume range"). `PCM,1`
-  (0–74, about 1 dB per step) is the GSX's real gain stage.
-- Under the `2.0 HD` profile, PipeWire's sink binds `PCM,0`, so the OS
-  slider is effectively software volume and never reaches `PCM,1`.
-- The stock `sennheiser-gsx.conf` profile set lists `PCM,1` for the 7.1
-  path, but in testing `PCM,1` did not follow the sink volume under 7.1
-  either.
-- Result: the OS slider and the GSX's internal gain are two independent
-  gain stages.
+  (0–74, −74 dB … 0 dB, 1 dB per step) is the GSX's real gain stage, and
+  the one its LED ring/display shows.
+- Turning the wheel changes the GSX's gain inside the firmware and sends
+  `KEY_VOLUMEUP` / `KEY_VOLUMEDOWN`. The firmware does **not** report its
+  new gain back over USB, so `amixer` keeps showing the last value the
+  host wrote.
+- The firmware stops sending `KEY_VOLUMEUP` when its gain is at maximum,
+  but keeps sending `KEY_VOLUMEDOWN`.
+- **On Windows** the system volume *is* `PCM,1`: the OS writes its volume
+  to the device, so the wheel, the display and the slider stay in step,
+  and the gain only sits at maximum when the OS volume is at 100%.
+
+### Why it breaks on stock PipeWire
+
+The stock `sennheiser-gsx.conf` profile set marks both GSX profiles
+`skip-probe = yes`. ACP only builds mixer paths while probing, so with
+`skip-probe` **no output gets a mixer path** (`spa-acp-tool -c <card>
+list-verbose` shows `ports: (0)` for every GSX output). The 7.1 path even
+lists `[Element PCM,1]`, but it is never loaded.
+
+Consequences:
+
+- The OS slider never reaches `PCM,1`. It and the GSX's gain are two
+  independent gain stages, so the display does not follow the slider.
+- Nothing ever lowers `PCM,1`. Once it reaches maximum it stays there, and
+  the wheel only turns volume **down** (see
+  [Troubleshooting](#turning-right-does-nothing-turning-left-still-works)).
+
+## Recommended: hardware volume override
+
+`alsa-card-profile/` contains a per-user override that does what Windows
+does: the sink's hardware volume drives `PCM,1`.
+
+- `profile-sets/sennheiser-gsx.conf`: the stock profile set with
+  `skip-probe` removed, and the `2.0 HD` mapping given an output path.
+- `paths/sennheiser-gsx-pcm1.conf`: binds `PCM,1` as volume and mute
+  (same element settings as the stock 7.1 path).
+
+ACP looks in `$XDG_CONFIG_HOME/alsa-card-profile/mixer` before
+`/usr/share`, so this affects only your user:
+
+```bash
+mkdir -p ~/.config/alsa-card-profile/mixer
+cp -r alsa-card-profile/profile-sets alsa-card-profile/paths ~/.config/alsa-card-profile/mixer/
+systemctl --user restart wireplumber     # audio drops out briefly
+```
+
+Verify:
+
+```bash
+pactl list sinks | grep -E 'Name:|Flags:|Active Port:'
+# 2.0 HD sink: Flags include HW_VOLUME_CTRL, Active Port: sennheiser-gsx-pcm1
+for v in 1.00 0.60; do wpctl set-volume @DEFAULT_AUDIO_SINK@ $v; sleep .3; amixer -c0 sget PCM,1 | grep 'Front Left'; done
+# 1.00 -> 74 [0.00dB], 0.60 -> 61 [-13.00dB]
+```
+
+Measured mapping (2.0 HD): 100% → 74 (0 dB), 80% → 69, 60% → 61, 40% → 51.
+
+Result on the test machine: the wheel works in both directions, the GSX
+display follows the KDE slider, and the slider follows the wheel. Only the
+`2.0 HD` profile was tested; 7.1 should now bind `PCM,1` through its stock
+path, but that is unverified.
+
+Remove:
+
+```bash
+rm ~/.config/alsa-card-profile/mixer/profile-sets/sennheiser-gsx.conf \
+   ~/.config/alsa-card-profile/mixer/paths/sennheiser-gsx-pcm1.conf
+systemctl --user restart wireplumber
+```
+
+The real fix belongs upstream in PipeWire's `sennheiser-gsx.conf` (drop
+`skip-probe`, give `stereo-output` a `PCM,1` path); not reported yet.
 
 ## Install
 
@@ -162,13 +227,17 @@ host. Confirm with:
 sudo timeout 20 libinput debug-events --show-keycodes --device /dev/input/event2
 ```
 
-Cause: **`PCM,1` is at its maximum (74).** The GSX firmware stops
-reporting "up" to the host when its internal gain has no headroom, but
-keeps reporting "down". Windows keeps that control in sync with its own
-volume slider, so it never sits at the top there. On Linux nothing drives
-it (see above), so once it is at maximum it stays there.
+Cause: **the GSX's gain is at its maximum (`PCM,1` = 74).** The firmware
+stops reporting "up" when its gain has no headroom, but keeps reporting
+"down". On stock PipeWire nothing ever lowers `PCM,1` (see [Why it breaks
+on stock PipeWire](#why-it-breaks-on-stock-pipewire)).
 
-Fix: give it a few steps of headroom and save the mixer state:
+Fix: install the [hardware volume
+override](#recommended-hardware-volume-override). The OS volume then sets
+`PCM,1`, so the gain is only at maximum when the OS volume is at 100%.
+
+Fallback without the override: give the gain some headroom by hand and
+save the mixer state:
 
 ```bash
 amixer -c0 sget PCM,1          # 74 = pinned at maximum
@@ -176,28 +245,27 @@ amixer -c0 sset PCM,1 70       # 73 was NOT enough on the test unit; 70 works
 sudo alsactl store             # persist across reboots
 ```
 
-`70` costs 4 dB at full volume. Replace `-c0` with your GSX card number
-from `cat /proc/asound/cards`.
-
-Note: `amixer` shows the driver's cached value. Turning the wheel did not
-change what `amixer` reports, so it cannot tell you where the firmware's
-internal gain currently is.
+This loses 4 dB at full volume, and turning the wheel up can pin it at the
+maximum again. Replace `-c0` with your GSX card number from
+`cat /proc/asound/cards`.
 
 ### Wheel and OS volume drift apart
 
-On Windows the wheel, the GSX display and the OS volume stay in step. On
-Linux they drift, because the OS slider and the GSX's internal gain are
-separate (see [Why not just let the hardware wheel
-do it?](#why-not-just-let-the-hardware-wheel-do-it)):
+On stock PipeWire the OS slider and the GSX's gain are separate (see [How
+the GSX volume works](#how-the-gsx-volume-works)), so the display does
+not follow the slider and the two drift. The [hardware volume
+override](#recommended-hardware-volume-override) fixes this: with it the
+GSX display follows the KDE slider.
 
-- The wheel changes the GSX's internal gain in its own steps and sends key
-  events. The desktop then moves the sink by its own step size (KDE:
-  `VolumeStep` in `~/.config/plasmaparc`).
-- Nothing writes the OS volume back to the GSX, so the display does not
-  follow the OS slider.
+### KDE slider occasionally stops moving while the sound still changes (open)
 
-Not solved yet. The likely fix is to make the sink's hardware volume drive
-`PCM,1` (as Windows does), but that has not been verified.
+With the override installed, turning the wheel sometimes makes the sound
+louder while KDE's slider/OSD stays still. Not diagnosed yet. Working
+theory: the firmware changes its gain on every detent but some
+`KEY_VOLUMEUP` events do not reach (or are not acted on by) the desktop,
+and since the GSX never reports its gain back, the host cannot notice. To
+check, log `libinput debug-events --device /dev/input/event2` side by side
+with `wpctl get-volume @DEFAULT_AUDIO_SINK@` while reproducing it.
 
 ### Service runs but the wheel does nothing
 
@@ -225,7 +293,7 @@ pw-dump | grep -o '"node.name".*GSX[^"]*'
 ### Volume moves two steps per detent
 
 First check that the desktop isn't also handling the wheel's volume keys
-(see the note at the top). Otherwise, lower `GSX_BURST_MIN` to 3; the
+(see the note at the top of this README). Otherwise, lower `GSX_BURST_MIN` to 3; the
 firmware may emit shorter bursts on your unit.
 
 ### Volume not moving in a game
@@ -239,6 +307,8 @@ volume; this daemon moves the *sink*, not individual streams.
 gsx-wheel-volume.py              the daemon
 systemd/gsx-wheel-volume.service user unit
 udev/70-sennheiser-gsx-wheel.rules
+alsa-card-profile/profile-sets/sennheiser-gsx.conf   PCM,1 override (profile set)
+alsa-card-profile/paths/sennheiser-gsx-pcm1.conf     PCM,1 override (2.0 HD path)
 scripts/install.sh               install + enable
 scripts/uninstall.sh             remove
 tests/test_detector.py           unit tests
