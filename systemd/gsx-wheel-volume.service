@@ -1,6 +1,6 @@
 [Unit]
 Description=Sennheiser GSX 1000 wheel to PipeWire volume bridge
-Documentation=https://github.com/yourname/gsx-wheel-volume
+Documentation=https://github.com/nuuttinurmi/gsx-wheel-volume
 # Only needs PipeWire reachable for wpctl; never restarts it.
 After=pipewire.service
 Wants=pipewire.service

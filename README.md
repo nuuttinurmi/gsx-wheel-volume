@@ -28,7 +28,7 @@ Reading the wheel directly removes the ambiguity.
 ## Install
 
 ```bash
-git clone <this-repo> ~/projects/gsx-wheel-volume
+git clone https://github.com/nuuttinurmi/gsx-wheel-volume.git ~/projects/gsx-wheel-volume
 cd ~/projects/gsx-wheel-volume
 ./scripts/install.sh
 ```
